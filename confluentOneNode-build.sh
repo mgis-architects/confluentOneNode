@@ -65,17 +65,12 @@ function installRPMs()
     INSTALL_RPM_LOG=$LOG_DIR/yum.${g_prog}_install.log.$$
 
     STR=""
-   # STR="$STR java-1.8.0-openjdk.x86_64i docker-engine-selinux-1.12.6-1.el7.centos docker-engine-1.12.6-1.el7.centos"
-    STR="$STR java-1.8.0-openjdk.x86_64i docker-ce-17.03.0.ce-1.el7.centos"
+    STR="$STR java-1.8.0-openjdk.x86_64i docker-ce-17.03.0.ce-1.el7.centos cifs-utils"
  
     unset DOCKER_HOST DOCKER_TLS_VERIFY
     yum -y remove docker docker-ce container-selinux docker-rhel-push-plugin docker-common docker-engine-selinux docker-engine yum-utils
 
     yum install -y yum-utils
-
-   # yum-config-manager \
-   #    --add-repo \
-   #    https://docs.docker.com/engine/installation/linux/repo_files/centos/docker.repo
 
     yum-config-manager \
        --add-repo \
@@ -89,15 +84,186 @@ function installRPMs()
     
     yum -y install $STR > $INSTALL_RPM_LOG
 
-    #if ! yum -y install $STR > $INSTALL_RPM_LOG
-    #then
-    #    fatalError "installRPMs(): failed; see $INSTALL_RPM_LOG"
-    #fi
     systemctl start docker > $INSTALL_RPM_LOG
     systemctl enable docker > $INSTALL_RPM_LOG
 
 
 }
+
+function fixSwap()
+{
+    cat /etc/waagent.conf | while read LINE
+    do
+        if [ "$LINE" == "ResourceDisk.EnableSwap=n" ]; then
+                LINE="ResourceDisk.EnableSwap=y"
+        fi
+
+        if [ "$LINE" == "ResourceDisk.SwapSizeMB=2048" ]; then
+                LINE="ResourceDisk.SwapSizeMB=14000"
+        fi
+        echo $LINE
+    done > /tmp/waagent.conf
+    /bin/cp /tmp/waagent.conf /etc/waagent.conf
+    systemctl restart waagent.service
+}
+
+createFilesystem()
+{
+    # createFilesystem /u01 $l_disk $diskSectors
+    # size is diskSectors-128 (offset)
+
+    local p_filesystem=$1
+    local p_disk=$2
+    local p_sizeInSectors=$3
+    local l_sectors
+    local l_layoutFile=$LOG_DIR/sfdisk.${g_prog}_install.log.$$
+
+    if [ -z $p_filesystem ] || [ -z $p_disk ] || [ -z $p_sizeInSectors ]; then
+        fatalError "createFilesystem(): Expected usage mount,device,numsectors, got $p_filesystem,$p_disk,$p_sizeInSectors"
+    fi
+
+    let l_sectors=$p_sizeInSectors-128
+
+    cat > $l_layoutFile << EOFsdcLayout
+# partition table of /dev/sdc
+unit: sectors
+
+/dev/sdc1 : start=     128, size=  ${l_sectors}, Id= 83
+/dev/sdc2 : start=        0, size=        0, Id= 0
+/dev/sdc3 : start=        0, size=        0, Id= 0
+/dev/sdc4 : start=        0, size=        0, Id= 0
+EOFsdcLayout
+
+    set -x # debug has been useful here
+
+    if ! sfdisk $p_disk < $l_layoutFile; then fatalError "createFilesystem(): $p_disk does not exist"; fi
+
+    sleep 4 # add a delay - experiencing occasional "cannot stat" for mkfs
+
+    log "createFilesystem(): Dump partition table for $p_disk"
+    fdisk -l
+
+    if ! mkfs.ext4 ${p_disk}1; then fatalError "createFilesystem(): mkfs.ext4 ${p_disk}1"; fi
+
+    if ! mkdir -p $p_filesystem; then fatalError "createFilesystem(): mkdir $p_filesystem failed"; fi
+
+    if ! chmod 755 $p_filesystem; then fatalError "createFilesystem(): chmod $p_filesystem failed"; fi
+
+    # if ! chown oracle:oinstall $p_filesystem; then fatalError "createFilesystem(): chown $p_filesystem failed"; fi
+
+    if ! mount ${p_disk}1 $p_filesystem; then fatalError "createFilesystem(): mount $p_disk $p_filesytem failed"; fi
+
+    log "createFilesystem(): Dump blkid"
+    blkid
+
+    if ! blkid | egrep ${p_disk}1 | awk '{printf "%s\t'${p_filesystem}' \t ext4 \t defaults \t 1 \t2\n", $2}' >> /etc/fstab; then fatalError "createFilesystem(): fstab update failed"; fi
+
+    log "createFilesystem() fstab success: $(grep $p_disk /etc/fstab)"
+
+    set +x
+}
+
+function allocateStorage()
+{
+    local l_disk
+    local l_size
+    local l_sectors
+    local l_hasPartition
+
+    for l_disk in /dev/sd?
+    do
+         l_hasPartition=$(( $(fdisk -l $l_disk | wc -l) != 6 ? 1 : 0 ))
+        # only use if it doesnt already have a blkid or udev UUID
+        if [ $l_hasPartition -eq 0 ]; then
+            let l_size=`fdisk -l $l_disk | grep 'Disk.*sectors' | awk '{print $5}'`/1024/1024/1024
+            let l_sectors=`fdisk -l $l_disk | grep 'Disk.*sectors' | awk '{print $7}'`
+
+            if [ $u01_Disk_Size_In_GB -eq $l_size ]; then
+                log "allocateStorage(): Creating /u01 on $l_disk"
+                createFilesystem /u01 $l_disk $l_sectors
+            fi
+        fi
+    done
+}
+
+function mountMedia() {
+
+    if [ -f /mnt/software/ogg4bd12201/p24816159_122014_Linux-x86-64.zip ]; then
+
+        log "mountMedia(): Filesystem already mounted"
+
+    else
+
+        umount /mnt/software
+
+        mkdir -p /mnt/software
+
+        eval `grep mediaStorageAccountKey $INI_FILE`
+        eval `grep mediaStorageAccount $INI_FILE`
+        eval `grep mediaStorageAccountURL $INI_FILE`
+
+        l_str=""
+        if [ -z $mediaStorageAccountKey ]; then
+            l_str+="mediaStorageAccountKey not found in $INI_FILE; "
+        fi
+        if [ -z $mediaStorageAccount ]; then
+            l_str+="mediaStorageAccount not found in $INI_FILE; "
+        fi
+        if [ -z $mediaStorageAccountURL ]; then
+            l_str+="mediaStorageAccountURL not found in $INI_FILE; "
+        fi
+        if ! [ -z $l_str ]; then
+            fatalError "mountMedia(): $l_str"
+        fi
+
+        cat > /etc/cifspw << EOF1
+username=${mediaStorageAccount}
+password=${mediaStorageAccountKey}
+EOF1
+
+        cat >> /etc/fstab << EOF2
+//${mediaStorageAccountURL}     /mnt/software   cifs    credentials=/etc/cifspw,vers=3.0,gid=54321      0       0
+EOF2
+
+        mount -a
+
+    fi
+}
+
+function installConfluent()
+{
+    # confluentVersion=3.0
+    confluentVersion=3.1
+
+    # http://docs.confluent.io/3.0.1/installation.html
+    # http://docs.confluent.io/3.1.2/installation.html
+    # lot of effort to get a kafka client...
+    # will be installed here... /usr/share/java/kafka
+    # sudo yum -y remove confluent-platform-2.11
+
+    sudo rpm --import http://packages.confluent.io/rpm/${confluentVersion}/archive.key
+    sudo su - -c "cat > /etc/yum.repos.d/confluent.repo << EOFrepo
+[Confluent.dist]
+name=Confluent repository (dist)
+baseurl=http://packages.confluent.io/rpm/${confluentVersion}/7
+gpgcheck=1
+gpgkey=http://packages.confluent.io/rpm/${confluentVersion}/archive.key
+enabled=1
+
+[Confluent]
+name=Confluent repository
+baseurl=http://packages.confluent.io/rpm/${confluentVersion}
+gpgcheck=1
+gpgkey=http://packages.confluent.io/rpm/${confluentVersion}/archive.key
+enabled=1
+
+EOFrepo
+"
+    sudo yum clean all
+    sudo yum -y install confluent-platform-2.11
+}
+
+
 
 ##############################################################
 # Open Zookeeper / Kafka Server Ports
@@ -106,26 +272,9 @@ function openZkKafkaPorts()
 {
     log "$g_prog.installZookeeper: Opening firewalls ports"    
     systemctl status firewalld  >> $LOG_FILE
-    firewall-cmd --get-active-zones  >> $LOG_FILE
-    firewall-cmd --zone=public --list-ports  >> $LOG_FILE
-    firewall-cmd --zone=public --add-port=${zkpserver1low}/tcp --permanent  >> $LOG_FILE  
-    firewall-cmd --zone=public --add-port=${zkpserver1high}/tcp --permanent  >> $LOG_FILE
-    firewall-cmd --zone=public --add-port=${zkpserver2low}/tcp --permanent  >> $LOG_FILE
-    firewall-cmd --zone=public --add-port=${zkpserver2high}/tcp --permanent  >> $LOG_FILE
-    firewall-cmd --zone=public --add-port=${zkpserver3low}/tcp --permanent  >> $LOG_FILE
-    firewall-cmd --zone=public --add-port=${zkpserver3high}/tcp --permanent  >> $LOG_FILE
-
-    firewall-cmd --zone=public --add-port=${zkpclient1}/tcp --permanent  >> $LOG_FILE
-    firewall-cmd --zone=public --add-port=${kafkapclient1}/tcp --permanent  >> $LOG_FILE
-   
-    firewall-cmd --zone=public --add-port=${zkpclient2}/tcp --permanent  >> $LOG_FILE
-    firewall-cmd --zone=public --add-port=${kafkapclient2}/tcp --permanent  >> $LOG_FILE
- 
-    firewall-cmd --zone=public --add-port=${ccport}/tcp --permanent
- 
+    firewall-cmd --zone=public --add-port=1024-65535/tcp --permanent >> $LOG_FILE
     firewall-cmd --reload  >> $LOG_FILE
     firewall-cmd --zone=public --list-ports  >> $LOG_FILE
-
 }
 
 ##############################################################
@@ -379,14 +528,52 @@ function installControlCentreServer()
 ##############################################################
 # Install components
 ##############################################################
-function installServer()
+function installKafkaConnect()
 {
-    installZookeeper 
-    installKafka
-    installSchemaServer
-    installRestServer
-    installConnectionServer
-    installControlCentreServer
+    cd /u01
+    mkdir /u01/kafka-connect-cassandra
+    tar xzvf /mnt/software/confluent/kafka-connect-cassandra-0.2.4-3.0.1-all.tar.gz -C /u01/kafka-connect-cassandra
+
+    kafka-topics --create --zookeeper 10.135.30.4:22181 --topic connect-configs --replication-factor 3 --partitions 1
+    kafka-topics --create --zookeeper 10.135.30.4:22181 --topic connect-offsets --replication-factor 3 --partitions 50
+    kafka-topics --create --zookeeper 10.135.30.4:22181 --topic connect-status --replication-factor 3 --partitions 10
+
+    cat > /u01/worker.properties << EOF
+bootstrap.servers=${zkKafkaSer1}:${kafkapclient1},${zkKafkaSer1}:${kafkapclient2},${zkKafkaSer1}:${kafkapclient3}
+group.id=connect-cluster1
+key.converter=io.confluent.connect.avro.AvroConverter
+key.converter.schema.registry.url=http://${schemaserver}:${schemaport1}
+value.converter=io.confluent.connect.avro.AvroConverter
+value.converter.schema.registry.url=http://${schemaserver}:${schemaport1}
+internal.key.converter=org.apache.kafka.connect.json.JsonConverter
+internal.value.converter=org.apache.kafka.connect.json.JsonConverter
+internal.key.converter.schemas.enable=false
+internal.value.converter.schemas.enable=false
+config.storage.topic=connect-configs
+offset.storage.topic=connect-offsets
+status.storage.topic=connect-statuses
+rest.port=8083
+EOF
+
+    cat > /u01/cassandra-sink-example.json << EOF2
+{
+    "name": "cassandra-sink1",
+    "config": {
+        "connector.class": "com.datamountaineer.streamreactor.connect.cassandra.sink.CassandraSinkConnector",
+        "tasks.max": "1",
+        "topics": "{topicName}",
+        "connect.cassandra.sink.kcql": "INSERT INTO customers SELECT * FROM {topicName} PK customer_id",
+        "connect.cassandra.contact.points": "${cassandraContactPoints}",
+        "connect.cassandra.port": "${cassandraPort}",
+        "connect.cassandra.key.space": "BD",
+        "connect.cassandra.username": "cassandra",
+        "connect.cassandra.password": "cassandra",
+        "connect.cassandra.ssl.enabled": "false",
+        "connect.cassandra.error.policy": "throw"
+    }
+}
+EOF2
+
 }
 
 
@@ -398,6 +585,9 @@ function run()
     elif [ $platformEnvironment != "AZURE" ]; then    
         fatalError "$g_prog.run(): platformEnvironment=AZURE is the only valid setting currently"
     fi
+
+    eval `grep cassandraContactPoints ${INI_FILE}`
+    eval `grep cassandraPort ${INI_FILE}`
 
     eval `grep zkKafkaSer1 ${INI_FILE}`
 #
@@ -420,18 +610,29 @@ function run()
     eval `grep restport1 ${INI_FILE}`
     eval `grep connectport1 ${INI_FILE}`
 # 
-#
     eval `grep ccport ${INI_FILE}`
     eval `grep nofile ${INI_FILE}`
     eval `grep repfactor ${INI_FILE}`
     eval `grep montopicpart ${INI_FILE}`
     eval `grep inttopicpart ${INI_FILE}`
     eval `grep streamthread ${INI_FILE}`
-#
-  # function calls
+    eval `grep u01_Disk_Size_In_GB $INI_FILE`
+
+    # function calls
     installRPMs
+    fixSwap
+    installRPMs
+    allocateStorage
+    mountMedia
+    installConfluent
     openZkKafkaPorts
-    installServer
+    installZookeeper 
+    installKafka
+    installSchemaServer
+    installRestServer
+    installConnectionServer
+    installControlCentreServer 
+    installKafkaConnect
 }
 
 
