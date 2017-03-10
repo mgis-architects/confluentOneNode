@@ -64,8 +64,6 @@ function installRPMs()
 {
     INSTALL_RPM_LOG=$LOG_DIR/yum.${g_prog}_install.log.$$
 
-    STR=""
-    STR="$STR java-1.8.0-openjdk.x86_64i docker-ce-17.03.0.ce-1.el7.centos cifs-utils"
  
     unset DOCKER_HOST DOCKER_TLS_VERIFY
     yum -y remove docker docker-ce container-selinux docker-rhel-push-plugin docker-common docker-engine-selinux docker-engine yum-utils
@@ -82,6 +80,8 @@ function installRPMs()
 
     echo "installRPMs(): to see progress tail $INSTALL_RPM_LOG"
     
+    STR=""
+    STR="$STR java-1.8.0-openjdk.x86_64 docker-ce-17.03.0.ce-1.el7.centos cifs-utils"
     yum -y install $STR > $INSTALL_RPM_LOG
 
     systemctl start docker > $INSTALL_RPM_LOG
@@ -272,6 +272,25 @@ function openZkKafkaPorts()
 {
     log "$g_prog.installZookeeper: Opening firewalls ports"    
     systemctl status firewalld  >> $LOG_FILE
+    firewall-cmd --get-active-zones  >> $LOG_FILE
+    firewall-cmd --zone=public --list-ports  >> $LOG_FILE
+#
+    firewall-cmd --zone=public --add-port=${zkpclient1}/tcp --permanent  >> $LOG_FILE
+    firewall-cmd --zone=public --add-port=${kafkapclient1}/tcp --permanent  >> $LOG_FILE
+    firewall-cmd --zone=public --add-port=${zkpserver1low}/tcp --permanent  >> $LOG_FILE  
+    firewall-cmd --zone=public --add-port=${zkpserver1high}/tcp --permanent  >> $LOG_FILE
+#
+    firewall-cmd --zone=public --add-port=${zkpclient2}/tcp --permanent  >> $LOG_FILE
+    firewall-cmd --zone=public --add-port=${kafkapclient2}/tcp --permanent  >> $LOG_FILE
+    firewall-cmd --zone=public --add-port=${zkpserver2low}/tcp --permanent  >> $LOG_FILE
+    firewall-cmd --zone=public --add-port=${zkpserver2high}/tcp --permanent  >> $LOG_FILE
+#
+    firewall-cmd --zone=public --add-port=${zkpclient3}/tcp --permanent  >> $LOG_FILE
+    firewall-cmd --zone=public --add-port=${kafkapclient3}/tcp --permanent  >> $LOG_FILE
+    firewall-cmd --zone=public --add-port=${zkpserver3low}/tcp --permanent  >> $LOG_FILE
+    firewall-cmd --zone=public --add-port=${zkpserver3high}/tcp --permanent  >> $LOG_FILE
+#
+    firewall-cmd --zone=public --add-port=${ccport}/tcp --permanent
     firewall-cmd --zone=public --add-port=1024-65535/tcp --permanent >> $LOG_FILE
     firewall-cmd --reload  >> $LOG_FILE
     firewall-cmd --zone=public --list-ports  >> $LOG_FILE
@@ -514,7 +533,7 @@ function installControlCentreServer()
        -e CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS=${montopicpart} \
        -e CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS=${inttopicpart} \
        -e CONTROL_CENTER_STREAMS_NUM_STREAM_THREADS=${streamthread} \
-       -e CONTROL_CENTER_CONNECT_CLUSTER=${schemaserver}:${connectport} \
+       -e CONTROL_CENTER_CONNECT_CLUSTER=${schemaserver}:${connectport1} \
        confluentinc/cp-enterprise-control-center:3.1.2
 #
     RC=$?
@@ -619,19 +638,20 @@ function run()
     eval `grep u01_Disk_Size_In_GB $INI_FILE`
 
     # function calls
-    installRPMs
+    openZkKafkaPorts
     fixSwap
     installRPMs
-    allocateStorage
-    mountMedia
-    installConfluent
-    openZkKafkaPorts
+#
     installZookeeper 
     installKafka
     installSchemaServer
     installRestServer
     installConnectionServer
     installControlCentreServer 
+#
+    allocateStorage
+    mountMedia
+    installConfluent
     installKafkaConnect
 }
 
