@@ -290,6 +290,9 @@ function openZkKafkaPorts()
     firewall-cmd --zone=public --add-port=${zkpserver3low}/tcp --permanent  >> $LOG_FILE
     firewall-cmd --zone=public --add-port=${zkpserver3high}/tcp --permanent  >> $LOG_FILE
 #
+    firewall-cmd --zone=public --add-port=${schemaport1}/tcp --permanent
+    firewall-cmd --zone=public --add-port=${restport1}/tcp --permanent
+#
     firewall-cmd --zone=public --add-port=${ccport}/tcp --permanent
     firewall-cmd --zone=public --add-port=1024-65535/tcp --permanent >> $LOG_FILE
     firewall-cmd --reload  >> $LOG_FILE
