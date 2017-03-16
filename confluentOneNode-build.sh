@@ -233,7 +233,7 @@ EOF2
 function installConfluent()
 {
     # confluentVersion=3.0
-    confluentVersion=3.1
+    # confluentVersion=3.1
 
     # http://docs.confluent.io/3.0.1/installation.html
     # http://docs.confluent.io/3.1.2/installation.html
@@ -294,7 +294,10 @@ function openZkKafkaPorts()
     firewall-cmd --zone=public --add-port=${restport1}/tcp --permanent
 #
     firewall-cmd --zone=public --add-port=${ccport}/tcp --permanent
-    firewall-cmd --zone=public --add-port=1024-65535/tcp --permanent >> $LOG_FILE
+#
+#   all for connect distributed worker rest port
+    firewall-cmd --zone=public --add-port=8080-8089/tcp --permanent >> $LOG_FILE
+#
     firewall-cmd --reload  >> $LOG_FILE
     firewall-cmd --zone=public --list-ports  >> $LOG_FILE
 }
@@ -560,9 +563,14 @@ function installKafkaConnect()
     kafka-topics --create --zookeeper 10.135.30.4:22181 --topic connect-offsets --replication-factor 3 --partitions 50
     kafka-topics --create --zookeeper 10.135.30.4:22181 --topic connect-status --replication-factor 3 --partitions 10
 
-    cat > /u01/worker.properties << EOF
+    mkdir /u01/worker_config
+
+#######################
+# Create the worker
+#######################
+    cat > /u01/worker_config/avro1_worker.properties << EOF
 bootstrap.servers=${zkKafkaSer1}:${kafkapclient1},${zkKafkaSer1}:${kafkapclient2},${zkKafkaSer1}:${kafkapclient3}
-group.id=connect-cluster1
+group.id=connect-avro1
 key.converter=io.confluent.connect.avro.AvroConverter
 key.converter.schema.registry.url=http://${schemaserver}:${schemaport1}
 value.converter=io.confluent.connect.avro.AvroConverter
@@ -577,17 +585,28 @@ status.storage.topic=connect-statuses
 rest.port=8083
 EOF
 
-    cat > /u01/cassandra-sink-example.json << EOF2
+#######################
+# start the worker
+#######################
+connect-distributed /u01/worker_config/avro1_worker.properties 2>&1 | tee /u01/avro1-connect-distributed.log &
+sleep 20
+
+#######################
+# Create the sync
+#######################
+
+    CREATE_CONFIG=/u01/worker_config/avro1-cassandra-sink-create.json
+    cat > $CREATE_CONFIG << EOF2
 {
-    "name": "cassandra-sink1",
+    "name": "avro1-cassandra-sink",
     "config": {
         "connector.class": "com.datamountaineer.streamreactor.connect.cassandra.sink.CassandraSinkConnector",
         "tasks.max": "1",
-        "topics": "{topicName}",
-        "connect.cassandra.sink.kcql": "INSERT INTO customers SELECT * FROM {topicName} PK customer_id",
+        "topics": "AVRO1.CUSTOMERS",
+        "connect.cassandra.sink.kcql": "INSERT INTO customers SELECT customer_id, first_name, last_name FROM AVRO1.CUSTOMERS PK customer_id",
         "connect.cassandra.contact.points": "${cassandraContactPoints}",
         "connect.cassandra.port": "${cassandraPort}",
-        "connect.cassandra.key.space": "BD",
+        "connect.cassandra.key.space": "AVRO1",
         "connect.cassandra.username": "cassandra",
         "connect.cassandra.password": "cassandra",
         "connect.cassandra.ssl.enabled": "false",
@@ -596,8 +615,37 @@ EOF
 }
 EOF2
 
-}
+    cat > /u01/worker_config/avro1-cassandra-sink-create.sh << EOF3
+curl -X POST -H "Content-Type: application/json" --data @$CREATE_CONFIG http://${HOSTNAME}:8083/connectors
+EOF3
+    bash -x /u01/worker_config/avro1-cassandra-sink-create.sh
 
+#######################
+# Update existing sync
+#######################
+    UPDATE_CONFIG=/u01/worker_config/avro1-cassandra-sink-update.json
+    cat > $UPDATE_CONFIG << EOF4
+{
+    "connector.class": "com.datamountaineer.streamreactor.connect.cassandra.sink.CassandraSinkConnector",
+    "tasks.max": "1",
+    "topics": "AVRO1.CUSTOMERS",
+    "connect.cassandra.sink.kcql": "INSERT INTO customers SELECT CUSTOMER_ID, FIRST_NAME, LAST_NAME FROM AVRO1.CUSTOMERS PK customer_id",
+    "connect.cassandra.contact.points": "${cassandraContactPoints}",
+    "connect.cassandra.port": "9042",
+    "connect.cassandra.key.space": "AVRO1",
+    "connect.cassandra.username": "cassandra",
+    "connect.cassandra.password": "cassandra",
+    "connect.cassandra.ssl.enabled": "false",
+    "connect.cassandra.error.policy": "throw"
+}
+EOF4
+
+    # should be no need to update, so just save to a file..
+    cat > /u01/worker_config/avro1-cassandra-sink-update.sh << EOF5
+curl -X PUT -H "Content-Type: application/json" --data @$UPDATE_CONFIG http://$HOSTNAME:8083/connectors/avro1-cassandra-sink1/config
+EOF5
+
+}
 
 function run()
 {
@@ -638,6 +686,7 @@ function run()
     eval `grep montopicpart ${INI_FILE}`
     eval `grep inttopicpart ${INI_FILE}`
     eval `grep streamthread ${INI_FILE}`
+    eval `grep confluentVersion $INI_FILE`
     eval `grep u01_Disk_Size_In_GB $INI_FILE`
 
     # function calls
