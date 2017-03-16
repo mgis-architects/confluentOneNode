@@ -556,19 +556,61 @@ function installControlCentreServer()
 function installKafkaConnect()
 {
     cd /u01
-    mkdir /u01/kafka-connect-cassandra
-    tar xzvf /mnt/software/confluent/kafka-connect-cassandra-0.2.4-3.0.1-all.tar.gz -C /u01/kafka-connect-cassandra
-
-    kafka-topics --create --zookeeper 10.135.30.4:22181 --topic connect-configs --replication-factor 3 --partitions 1
-    kafka-topics --create --zookeeper 10.135.30.4:22181 --topic connect-offsets --replication-factor 3 --partitions 50
-    kafka-topics --create --zookeeper 10.135.30.4:22181 --topic connect-status --replication-factor 3 --partitions 10
-
+    mkdir -p /u01/app/kafka-connect-cassandra
     mkdir /u01/worker_config
+    mkdir /u01/logs
+    tar xzvf /mnt/software/confluent/kafka-connect-cassandra-0.2.4-3.0.1-all.tar.gz -C /u01/app/kafka-connect-cassandra
 
 #######################
-# Create the worker
+# Useful functions
 #######################
-    cat > /u01/worker_config/avro1_worker.properties << EOF
+    cat > /u01/set_env << EOFenv
+export confluentRestUrl=http://${HOSTNAME}:${restport1}
+alias brokers.list='curl -X GET -H "Content-Type: application/json" ${confluentRestUrl}/brokers 2> /dev/null | python -mjson.tool'
+function topics.list() { curl -X GET -H "Content-Type: application/json" ${confluentRestUrl}/topics/${1} 2>/dev/null | python -mjson.tool; }
+function topic.get() { curl -X GET -H "Content-Type: application/json" ${confluentRestUrl}/topics/${1} 2>/dev/null | python -mjson.tool; }
+function partition.list() { curl -X GET -H "Content-Type: application/json" ${confluentRestUrl}/topics/${1}/partitions 2>/dev/null | python -mjson.tool; }
+function partition.get() { curl -X GET -H "Content-Type: application/json" ${confluentRestUrl}/topics/${1}/partitions/${2} 2>/dev/null | python -mjson.tool; }
+function consumer.createbinary() { group=$1; instance=$2; echo '{ "id": "'$instance'", "format": "binary", "auto.offset.reset": "smallest", "auto.commit.enable": "false" }' > /tmp/consumer.create.$$.json; curl -X POST -H "Content-Type: application/vnd.kafka.binary.v1+json" --data-binary "@/tmp/consumer.create.$$.json" ${confluentRestUrl}/consumers/${group} 2>/dev/null | python -mjson.tool; }
+function consumer.createavro() { group=$1; instance=$2; echo '{ "id": "'$instance'", "format": "binary", "auto.offset.reset": "smallest", "auto.commit.enable": "false" }' > /tmp/consumer.create.$$.json; curl -X POST -H "Content-Type: application/vnd.kafka.avro.v1+json" --data-binary "@/tmp/consumer.create.$$.json" ${confluentRestUrl}/consumers/${group} 2>/dev/null | python -mjson.tool; }
+function consumer.readbinary() { group=$1; instance=$2; topic_name=$3; curl -X GET -H "Content-Type: application/vnd.kafka.binary.v2+json" ${confluentRestUrl}/consumers/${group}/instances/${instance}/topics/${topic_name} 2>/dev/null | python -mjson.tool; }
+#function consumer.readavro() { group=$1; instance=$2; topic_name=$3; curl -X GET -H "Content-Type: application/vnd.kafka.avro.v1+json" ${confluentRestUrl}/consumers/${group}/instances/${instance}/topics/${topic_name} 2>/dev/null | python -mjson.tool; }
+function consumer.readavro() { group=$1; instance=$2; topic_name=$3; curl -X GET -H "Accept: application/vnd.kafka.avro.v1+json" ${confluentRestUrl}/consumers/${group}/instances/${instance}/topics/${topic_name} 2>/dev/null | python -mjson.tool; }
+function consumer.readavro() { group=$1; instance=$2; topic_name=$3; curl -X GET -H "Accept: application/vnd.kafka.v2+json" ${confluentRestUrl}/consumers/${group}/instances/${instance}/topics/${topic_name} 2>/dev/null | python -mjson.tool; }
+function consumer.readavro() { group=$1; instance=$2; topic_name=$3; curl -X GET -H "Accept: application/vnd.kafka.binary.v1+json" ${confluentRestUrl}/consumers/${group}/instances/${instance}/topics/${topic_name} 2>/dev/null | python -mjson.tool; }
+function consumer.commit() { group=$1; instance=$2; curl -X POST -H "Content-Type: application/json" ${confluentRestUrl}/consumers/${group}/instances/${instance}/offsets 2>/dev/null | python -mjson.tool; }
+function consumer.delete() { group=$1; instance=$2; curl -X DELETE -H "Content-Type: application/json" ${confluentRestUrl}/consumers/${group}/instances/${instance}; }
+# partition.produce-avro	POST /topics/{topic}/partitions/{partition} with Content-Type: application/vnd.kafka.avro.v1+json header
+# partition.produce-binary	POST /topics/{topic}/partitions/{partition} with Content-Type: application/vnd.kafka.binary.v1+json header
+# topic.produce-avro	POST /topics/{topic} with Content-Type: application/vnd.kafka.avro.v1+json header
+# topic.produce-binary	POST /topics/{topic} with Content-Type: application/vnd.kafka.binary.v1+json header
+
+export schemaRegistryRestUrl=http://${HOSTNAME}:${schemaport1}
+function sr.subject.list() { curl -X GET -H "Accept: application/vnd.schemaregistry.v1+json" ${schemaRegistryRestUrl}/subjects 2>/dev/null | python -mjson.tool; }
+function sr.subject.versions() { subject=$1; curl -X GET -H "Accept: application/vnd.schemaregistry.v1+json" ${schemaRegistryRestUrl}/subjects/${subject}/versions 2>/dev/null | python -mjson.tool; }
+function sr.subject.getversion() { subject=$1; version=$2; curl -X GET -H "Accept: application/vnd.schemaregistry.v1+json" ${schemaRegistryRestUrl}/subjects/${subject}/versions/${version} 2>/dev/null | python -mjson.tool; }
+function sr.schema.get() { id=$1; curl -X GET -H "Accept: application/vnd.schemaregistry.v1+json" ${schemaRegistryRestUrl}/schemas/ids/${id} 2>/dev/null | python -mjson.tool; }
+EOFenv
+
+###########################################################
+# Create "AVRO1" sample config 
+###########################################################
+
+##############################################
+# Create topics for the sample worker
+##############################################
+    cat> /u01/worker_config/avro1-worker-topics.sh << EOFtop
+    kafka-topics --create --zookeeper ${HOSTNAME}:${zkpclient1} --topic avro1-connect-configs --replication-factor 3 --partitions 1
+    kafka-topics --create --zookeeper ${HOSTNAME}:${zkpclient1} --topic avro1-connect-offsets --replication-factor 3 --partitions 50
+    kafka-topics --create --zookeeper ${HOSTNAME}:${zkpclient1} --topic avro1-connect-status --replication-factor 3 --partitions 10
+EOFtop
+
+    bash -x /u01/worker_config/avro1-worker-topics.sh
+
+##############################################
+# Create the sample worker
+##############################################
+    cat > /u01/worker_config/avro1-worker.properties << EOF
 bootstrap.servers=${zkKafkaSer1}:${kafkapclient1},${zkKafkaSer1}:${kafkapclient2},${zkKafkaSer1}:${kafkapclient3}
 group.id=connect-avro1
 key.converter=io.confluent.connect.avro.AvroConverter
@@ -579,23 +621,28 @@ internal.key.converter=org.apache.kafka.connect.json.JsonConverter
 internal.value.converter=org.apache.kafka.connect.json.JsonConverter
 internal.key.converter.schemas.enable=false
 internal.value.converter.schemas.enable=false
-config.storage.topic=connect-configs
-offset.storage.topic=connect-offsets
-status.storage.topic=connect-statuses
+config.storage.topic=avro1-connect-configs
+offset.storage.topic=avro1-connect-offsets
+status.storage.topic=avro1-connect-statuses
 rest.port=8083
 EOF
 
-#######################
-# start the worker
-#######################
-connect-distributed /u01/worker_config/avro1_worker.properties 2>&1 | tee /u01/avro1-connect-distributed.log &
-sleep 20
+##############################################
+# start the sample worker
+##############################################
+    cat > /u01/worker_config/avro1-worker-start.sh << EOFstart
+export CLASSPATH=/u01/app/kafka-connect-cassandra/kafka-connect-cassandra-0.2.4-3.0.1-all.jar
+nohup connect-distributed /u01/worker_config/avro1-worker.properties > /u01/logs/avro1-worker.log 2>&1 &
+EOFstart
+    bash -x /u01/worker_config/avro1-worker-start.sh
+    sleep 30
 
-#######################
-# Create the sync
-#######################
+##############################################
+# Create the cassandra sink and apply to worker
+##############################################
 
     CREATE_CONFIG=/u01/worker_config/avro1-cassandra-sink-create.json
+
     cat > $CREATE_CONFIG << EOF2
 {
     "name": "avro1-cassandra-sink",
@@ -620,9 +667,9 @@ curl -X POST -H "Content-Type: application/json" --data @$CREATE_CONFIG http://$
 EOF3
     bash -x /u01/worker_config/avro1-cassandra-sink-create.sh
 
-#######################
-# Update existing sync
-#######################
+##############################################
+# Save commands to update Cassandra sink
+##############################################
     UPDATE_CONFIG=/u01/worker_config/avro1-cassandra-sink-update.json
     cat > $UPDATE_CONFIG << EOF4
 {
@@ -640,7 +687,7 @@ EOF3
 }
 EOF4
 
-    # should be no need to update, so just save to a file..
+    # just save to a file...
     cat > /u01/worker_config/avro1-cassandra-sink-update.sh << EOF5
 curl -X PUT -H "Content-Type: application/json" --data @$UPDATE_CONFIG http://$HOSTNAME:8083/connectors/avro1-cassandra-sink1/config
 EOF5
