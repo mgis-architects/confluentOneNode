@@ -234,9 +234,11 @@ function installConfluent()
 {
     # confluentVersion=3.0
     # confluentVersion=3.1
+    # confluentVersion=3.2
 
     # http://docs.confluent.io/3.0.1/installation.html
     # http://docs.confluent.io/3.1.2/installation.html
+    # http://docs.confluent.io/3.2.2/installation.html
     # lot of effort to get a kafka client...
     # will be installed here... /usr/share/java/kafka
     # sudo yum -y remove confluent-platform-2.11
@@ -318,7 +320,7 @@ function installZookeeper()
         -e ZOOKEEPER_INIT_LIMIT=5 \
         -e ZOOKEEPER_SYNC_LIMIT=2 \
         -e ZOOKEEPER_SERVERS="${zkKafkaSer1}:${zkpserver1low}:${zkpserver1high};${zkKafkaSer1}:${zkpserver2low}:${zkpserver2high};${zkKafkaSer1}:${zkpserver3low}:${zkpserver3high}" \
-         confluentinc/cp-zookeeper:3.1.2
+         confluentinc/cp-zookeeper:${confluentDockerVersion}
 #
     RC=$?
     if [ ${RC} -ne 0 ]; then
@@ -335,7 +337,7 @@ function installZookeeper()
         -e ZOOKEEPER_INIT_LIMIT=5 \
         -e ZOOKEEPER_SYNC_LIMIT=2 \
         -e ZOOKEEPER_SERVERS="${zkKafkaSer1}:${zkpserver1low}:${zkpserver1high};${zkKafkaSer1}:${zkpserver2low}:${zkpserver2high};${zkKafkaSer1}:${zkpserver3low}:${zkpserver3high}" \
-         confluentinc/cp-zookeeper:3.1.2
+         confluentinc/cp-zookeeper:${confluentDockerVersion}
 #
     RC=$?
     if [ ${RC} -ne 0 ]; then
@@ -352,7 +354,7 @@ function installZookeeper()
         -e ZOOKEEPER_INIT_LIMIT=5 \
         -e ZOOKEEPER_SYNC_LIMIT=2 \
         -e ZOOKEEPER_SERVERS="${zkKafkaSer1}:${zkpserver1low}:${zkpserver1high};${zkKafkaSer1}:${zkpserver2low}:${zkpserver2high};${zkKafkaSer1}:${zkpserver3low}:${zkpserver3high}" \
-         confluentinc/cp-zookeeper:3.1.2
+         confluentinc/cp-zookeeper:${confluentDockerVersion}
 #
     RC=$?
     if [ ${RC} -ne 0 ]; then
@@ -376,7 +378,7 @@ function installKafka()
         --name=kafka-1 \
         -e KAFKA_ZOOKEEPER_CONNECT=${zkKafkaSer1}:${zkpclient1},${zkKafkaSer1}:${zkpclient2},${zkKafkaSer1}:${zkpclient3} \
         -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://${kafkaserver1}:${kafkapclient1} \
-        confluentinc/cp-kafka:3.1.2
+        confluentinc/cp-kafka:${confluentDockerVersion}
 
     RC=$?
     if [ ${RC} -ne 0 ]; then
@@ -392,7 +394,7 @@ function installKafka()
         --name=kafka-2 \
         -e KAFKA_ZOOKEEPER_CONNECT=${zkKafkaSer1}:${zkpclient1},${zkKafkaSer1}:${zkpclient2},${zkKafkaSer1}:${zkpclient3} \
         -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://${kafkaserver1}:${kafkapclient2} \
-        confluentinc/cp-kafka:3.1.2
+        confluentinc/cp-kafka:${confluentDockerVersion}
 
     RC=$?
     if [ ${RC} -ne 0 ]; then
@@ -408,7 +410,7 @@ function installKafka()
         --name=kafka-3 \
         -e KAFKA_ZOOKEEPER_CONNECT=${zkKafkaSer1}:${zkpclient1},${zkKafkaSer1}:${zkpclient2},${zkKafkaSer1}:${zkpclient3} \
         -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://${kafkaserver1}:${kafkapclient3} \
-        confluentinc/cp-kafka:3.1.2
+        confluentinc/cp-kafka:${confluentDockerVersion}
 
     RC=$?
     if [ ${RC} -ne 0 ]; then
@@ -434,7 +436,7 @@ function installSchemaServer()
        -e SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL=${zkKafkaSer1}:${zkpclient1},${zkKafkaSer1}:${zkpclient2},${zkKafkaSer1}:${zkpclient3} \
        -e SCHEMA_REGISTRY_HOST_NAME=${schemaserver} \
        -e SCHEMA_REGISTRY_LISTENERS=http://${schemaserver}:${schemaport1} \
-       confluentinc/cp-schema-registry:3.1.2
+       confluentinc/cp-schema-registry:${confluentDockerVersion}
 #
     RC=$?
     if [ ${RC} -ne 0 ]; then
@@ -462,7 +464,7 @@ function installRestServer()
         -e KAFKA_REST_LISTENERS=http://${schemaserver}:${restport1} \
         -e KAFKA_REST_SCHEMA_REGISTRY_URL=http://${schemaserver}:${schemaport1} \
         -e KAFKA_REST_HOST_NAME=${schemaserver} \
-        confluentinc/cp-kafka-rest:3.1.2
+        confluentinc/cp-kafka-rest:${confluentDockerVersion}
 #
     RC=$?
     if [ ${RC} -ne 0 ]; then
@@ -497,7 +499,7 @@ function installConnectionServer()
        -e CONNECT_INTERNAL_KEY_CONVERTER="org.apache.kafka.connect.json.JsonConverter" \
        -e CONNECT_INTERNAL_VALUE_CONVERTER="org.apache.kafka.connect.json.JsonConverter" \
        -e CONNECT_REST_ADVERTISED_HOST_NAME=${schemaserver} \
-       confluentinc/cp-kafka-connect:3.1.2
+       confluentinc/cp-kafka-connect:${confluentDockerVersion}
 #
     RC=$?
     if [ ${RC} -ne 0 ]; then
@@ -540,7 +542,7 @@ function installControlCentreServer()
        -e CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS=${inttopicpart} \
        -e CONTROL_CENTER_STREAMS_NUM_STREAM_THREADS=${streamthread} \
        -e CONTROL_CENTER_CONNECT_CLUSTER=${schemaserver}:${connectport1} \
-       confluentinc/cp-enterprise-control-center:3.1.2
+       confluentinc/cp-enterprise-control-center:${confluentDockerVersion}
 #
     RC=$?
     if [ ${RC} -ne 0 ]; then
@@ -605,7 +607,7 @@ EOFenv
     kafka-topics --create --zookeeper ${HOSTNAME}:${zkpclient1} --topic avro1-connect-status --replication-factor 3 --partitions 10
 EOFtop
 
-    bash -x /u01/worker_config/avro1-worker-topics.sh
+#    bash -x /u01/worker_config/avro1-worker-topics.sh
 
 ##############################################
 # Create the sample worker
@@ -634,7 +636,7 @@ EOF
 export CLASSPATH=/u01/app/kafka-connect-cassandra/kafka-connect-cassandra-0.2.4-3.0.1-all.jar
 nohup connect-distributed /u01/worker_config/avro1-worker.properties > /u01/logs/avro1-worker.log 2>&1 &
 EOFstart
-    bash -x /u01/worker_config/avro1-worker-start.sh
+    #bash -x /u01/worker_config/avro1-worker-start.sh
     sleep 30
 
 ##############################################
@@ -665,7 +667,7 @@ EOF2
     cat > /u01/worker_config/avro1-cassandra-sink-create.sh << EOF3
 curl -X POST -H "Content-Type: application/json" --data @$CREATE_CONFIG http://${HOSTNAME}:8083/connectors
 EOF3
-    bash -x /u01/worker_config/avro1-cassandra-sink-create.sh
+#    bash -x /u01/worker_config/avro1-cassandra-sink-create.sh
 
 ##############################################
 # Save commands to update Cassandra sink
@@ -734,6 +736,7 @@ function run()
     eval `grep inttopicpart ${INI_FILE}`
     eval `grep streamthread ${INI_FILE}`
     eval `grep confluentVersion $INI_FILE`
+    eval `grep confluentDockerVersion $INI_FILE`
     eval `grep u01_Disk_Size_In_GB $INI_FILE`
 
     # function calls
